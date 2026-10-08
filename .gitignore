@@ -1,0 +1,7 @@
+# Coverage artifacts
+coverage.html
+coverage.out
+
+# IDE artifacts
+.idea
+.vscode

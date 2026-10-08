@@ -1,0 +1,65 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    name: integration tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the coverage badge to the badges branch
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Starts a temporary PostgreSQL 18 container (Docker is preinstalled on
+      # GitHub-hosted Ubuntu runners) and runs unit + integration tests with
+      # coverage.
+      - name: Run integration tests with coverage
+        run: make coverage
+
+      - name: Compute coverage percentage
+        id: coverage
+        run: |
+          pct=$(go tool cover -func=coverage.out | awk '/^total:/ { sub(/%/, "", $NF); print $NF }')
+          echo "percent=$pct" >> "$GITHUB_OUTPUT"
+          echo "### Coverage: ${pct}%" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: |
+            coverage.out
+            coverage.html
+
+      # Publishes a shields.io endpoint JSON file to the orphan `badges`
+      # branch so the README coverage badge needs no third-party service.
+      - name: Publish coverage badge
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          PCT: ${{ steps.coverage.outputs.percent }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          color=$(awk -v p="$PCT" 'BEGIN {
+            if (p >= 90) print "brightgreen"; else if (p >= 80) print "green";
+            else if (p >= 70) print "yellowgreen"; else if (p >= 60) print "yellow";
+            else if (p >= 50) print "orange"; else print "red" }')
+          dir=$(mktemp -d)
+          cd "$dir"
+          git init -q -b badges
+          printf '{"schemaVersion":1,"label":"coverage","message":"%s%%","color":"%s"}\n' "$PCT" "$color" > coverage.json
+          git add coverage.json
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit -q -m "Update coverage badge: ${PCT}%"
+          git push -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" badges
